@@ -50,6 +50,7 @@ export interface Project {
   user_id: string
   name: string
   description?: string
+  monolithic_dir?: string | null
   frontend_dir?: string
   backend_dir?: string
   frontend_tech?: string
@@ -63,6 +64,7 @@ export interface Project {
   repo_full_name?: string | null
   zoho_portal_name?: string | null
   zoho_project_id?: string | null
+  zoho_project_name?: string | null
   server_start_command?: string | null
   server_port?: number | null
   created_at: string
@@ -116,6 +118,7 @@ export interface TestScenario {
   steps?: string
   expected?: string
   status: 'pending' | 'passed' | 'failed'
+  type?: 'playwright' | 'manual'
 }
 
 export interface TestResult {
@@ -224,6 +227,12 @@ export const pipelineApi = {
     api.post(`/pipelines/${runId}/tests/approve`, { scenarios }),
   skipTests: (runId: string) => api.post(`/pipelines/${runId}/tests/skip`),
   reworkTests: (runId: string, feedback: string) => api.post(`/pipelines/${runId}/tests/rework`, { feedback }),
+  retryPlaywright: (runId: string, scenarioIds: string[]) =>
+    api.post<{ scenarios: string; browser_test_status: string }>(
+      `/pipelines/${runId}/tests/retry-playwright`,
+      { scenario_ids: scenarioIds },
+      { timeout: 660_000 },  // 11 min — server start (5s) + 10 min test timeout
+    ),
 
   getMR: (runId: string) => api.get<MergeRequest>(`/pipelines/${runId}/mr`),
   confirmMerge: (runId: string) => api.post(`/pipelines/${runId}/mr/confirm-merge`),

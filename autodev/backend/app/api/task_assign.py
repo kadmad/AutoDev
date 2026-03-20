@@ -46,15 +46,17 @@ def _extract_title(description: str) -> str:
 
 
 async def _find_user_and_project(
-    task_owner_email: str, db: AsyncSession
+    task_owner_email: str,
+    db: AsyncSession,
+    zoho_project_id: str = "",
+    zoho_project_name: str = "",
 ) -> tuple[User | None, Project | None]:
-    # Try AutoDev account email first
+    # Resolve user by AutoDev email or linked Zoho email
     user_result = await db.execute(
         select(User).where(User.email == task_owner_email)
     )
     user = user_result.scalar_one_or_none()
 
-    # Fallback: match against zoho_email in zoho_configs
     if not user:
         zoho_result = await db.execute(
             select(ZohoConfig).where(ZohoConfig.zoho_email == task_owner_email)
@@ -69,10 +71,46 @@ async def _find_user_and_project(
     if not user:
         return None, None
 
-    proj_result = await db.execute(
+    # 1. Exact match on Zoho project ID (most reliable)
+    if zoho_project_id:
+        r = await db.execute(
+            select(Project).where(
+                Project.user_id == user.id,
+                Project.zoho_project_id == zoho_project_id,
+            )
+        )
+        project = r.scalar_one_or_none()
+        if project:
+            return user, project
+
+    # 2. Case-insensitive match on stored zoho_project_name
+    if zoho_project_name:
+        r = await db.execute(
+            select(Project).where(
+                Project.user_id == user.id,
+                Project.zoho_project_name.ilike(zoho_project_name),
+            )
+        )
+        project = r.scalar_one_or_none()
+        if project:
+            return user, project
+
+        # 3. Fall back: AutoDev project name matches the Zoho project name
+        r = await db.execute(
+            select(Project).where(
+                Project.user_id == user.id,
+                Project.name.ilike(zoho_project_name),
+            )
+        )
+        project = r.scalar_one_or_none()
+        if project:
+            return user, project
+
+    # 4. Last resort: first project (backwards compat for single-project setups)
+    r = await db.execute(
         select(Project).where(Project.user_id == user.id).limit(1)
     )
-    project = proj_result.scalar_one_or_none()
+    project = r.scalar_one_or_none()
     return user, project
 
 
@@ -84,10 +122,14 @@ async def _handle_task_assign(
     task_id: str = "",
     task_number: str = "",
     task_title: str = "",
+    zoho_project_id: str = "",
+    zoho_project_name: str = "",
 ) -> dict:
-    task_owner  = task_owner.strip()
-    task_id     = task_id.strip()
-    task_number = task_number.strip()
+    task_owner       = task_owner.strip()
+    task_id          = task_id.strip()
+    task_number      = task_number.strip()
+    zoho_project_id  = zoho_project_id.strip()
+    zoho_project_name = zoho_project_name.strip()
 
     # Strip HTML from both title and description before storing
     description = _strip_html(description).strip()
@@ -95,14 +137,20 @@ async def _handle_task_assign(
 
     print(
         f"[task-assign] task_owner={task_owner!r} task_id={task_id!r} "
-        f"task_number={task_number!r} task_title={task_title!r} description={description[:80]!r}",
+        f"task_number={task_number!r} task_title={task_title!r} "
+        f"zoho_project_id={zoho_project_id!r} zoho_project_name={zoho_project_name!r} "
+        f"description={description[:80]!r}",
         flush=True,
     )
 
     if not task_owner or not description:
         raise HTTPException(status_code=400, detail="task_owner and description are required")
 
-    user, project = await _find_user_and_project(task_owner, db)
+    user, project = await _find_user_and_project(
+        task_owner, db,
+        zoho_project_id=zoho_project_id,
+        zoho_project_name=zoho_project_name,
+    )
 
     if not user:
         raise HTTPException(
@@ -112,9 +160,17 @@ async def _handle_task_assign(
         )
 
     if not project:
+        hint = ""
+        if zoho_project_name or zoho_project_id:
+            hint = (
+                f" No project matched Zoho project "
+                f"{'ID=' + zoho_project_id if zoho_project_id else ''}"
+                f"{'name=' + zoho_project_name if zoho_project_name else ''}."
+                " Set the matching Zoho Project Name on your AutoDev project."
+            )
         raise HTTPException(
             status_code=422,
-            detail=f"User '{task_owner}' has no project configured. "
+            detail=f"User '{task_owner}' has no project configured.{hint} "
                    "Create one at http://localhost:3000/projects/new",
         )
 
@@ -179,5 +235,18 @@ async def task_assign_post(
         body.get("name")        or params.get("name",        "") or
         body.get("title")       or params.get("title",       "")
     )
+    # Zoho project identification — used to route to the right AutoDev project
+    zoho_project_id = (
+        body.get("project_id")   or params.get("project_id",   "") or
+        body.get("projectId")    or params.get("projectId",    "")
+    )
+    zoho_project_name = (
+        body.get("project_name") or params.get("project_name", "") or
+        body.get("projectName")  or params.get("projectName",  "")
+    )
 
-    return await _handle_task_assign(task_owner, description, platform, db, task_id, task_number, task_title)
+    return await _handle_task_assign(
+        task_owner, description, platform, db,
+        task_id, task_number, task_title,
+        zoho_project_id, zoho_project_name,
+    )

@@ -113,7 +113,7 @@ async def list_zoho_portals(
         raise HTTPException(status_code=401, detail="Zoho token expired — reconnect OAuth")
 
     try:
-        portals = await get_portals(token)
+        portals = await get_portals(token, api_domain=config.api_domain)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Zoho API error: {e}")
 
@@ -137,7 +137,7 @@ async def list_zoho_projects(
         raise HTTPException(status_code=401, detail="Zoho token expired — reconnect OAuth")
 
     try:
-        projects = await get_projects_for_portal(token, portal_name)
+        projects = await get_projects_for_portal(token, portal_name, api_domain=config.api_domain)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Zoho API error: {e}")
 

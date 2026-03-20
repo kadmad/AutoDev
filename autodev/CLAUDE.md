@@ -22,7 +22,7 @@ brew services start redis
 
 # Backend (from autodev/backend/)
 source venv/bin/activate
-uvicorn app.main:app --port 8000 --reload
+uvicorn app.main:app --port 8000 --reload --reload-dir app
 
 # rq worker (separate terminal, from autodev/backend/)
 source venv/bin/activate

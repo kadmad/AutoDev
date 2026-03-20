@@ -35,6 +35,7 @@ class ZohoConfig(Base):
     access_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_expiry: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    api_domain: Mapped[str | None] = mapped_column(String(255), nullable=True)  # e.g. "https://www.zohoapis.in"
     webhook_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
     poll_interval_seconds: Mapped[int] = mapped_column(default=60)
     token_expired: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")

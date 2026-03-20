@@ -127,6 +127,7 @@ class TestScenario(BaseModel):
     steps: Optional[str] = None
     expected: Optional[str] = None
     status: str  # "pending" | "passed" | "failed"
+    type: Optional[str] = "manual"  # "playwright" | "manual"
 
 
 class TestScenariosUpdateRequest(BaseModel):

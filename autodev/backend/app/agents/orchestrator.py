@@ -3,6 +3,7 @@ Pipeline Orchestrator — state machine that drives pipeline runs.
 Called by the rq worker for each pipeline run.
 """
 import asyncio
+import traceback
 from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,7 @@ import uuid as _uuid
 from app.agents.planner import PlannerAgent
 from app.agents.backend_developer import BackendDeveloperAgent
 from app.agents.frontend_developer import FrontendDeveloperAgent
+from app.agents.monolithic_developer import MonolithicDeveloperAgent
 from app.agents.pr_creator import PRCreatorAgent, PRCreatorAgent as PRC
 from app.agents.zoho_updater import ZohoUpdaterAgent
 from app.services.redis_service import publish_stage, publish_log, publish_pipeline_event
@@ -42,11 +44,14 @@ async def run_pipeline(run_id: str, project_id: str):
             await _orchestrate(db, run, project)
         except Exception as e:
             # Fetch run again in case the session is poisoned
+            tb = traceback.format_exc()
+            error_msg = repr(e) if not str(e) else str(e)
+            print(f"[Orchestrator] UNCAUGHT EXCEPTION for run {run_id}:\n{tb}", flush=True)
             try:
                 async with AsyncSessionLocal() as db2:
                     run2 = await _get_run(db2, run_id)
                     if run2:
-                        await _fail(db2, run2, str(e))
+                        await _fail(db2, run2, error_msg)
             except Exception:
                 pass
 
@@ -66,24 +71,29 @@ async def _orchestrate(db: AsyncSession, run: PipelineRun, project: Project):
         return  # Pause at plan_review
 
     # Stage: developing (triggered by /plan/approve)
+    came_from_development = False
     if run.status == "developing":
         await _do_development(db, run, project)
+        came_from_development = True
         # Fall through: _do_development transitions to "testing",
         # so the next if block runs immediately in the same orchestrator call.
 
-    # Stage: testing — extract scenarios from plan and pause for human verification
+    # Stage: testing — run playwright tests, then pause for human verification
     if run.status == "testing":
-        # Skip setup only when a TestResult already exists WITH non-empty scenarios
-        # (meaning the user has already started testing, e.g. after a rework re-enqueue).
-        # If scenarios is empty/null, re-run extraction — previous attempt may have failed.
-        existing = await db.execute(
-            select(TestResult).where(TestResult.pipeline_run_id == run.id).limit(1)
-        )
-        tr = existing.scalar_one_or_none()
-        has_scenarios = tr and tr.scenarios and tr.scenarios not in ('[]', '', 'null')
-        if not has_scenarios:
+        if came_from_development:
+            # Always re-run: fresh code was just written, playwright must re-test
             await _do_testing(db, run, project)
-        return  # Pause here — user ticks off test cases and clicks "Testing Done"
+        else:
+            # Re-enqueued while paused at testing (e.g. server restart) —
+            # only run setup if no scenarios exist yet.
+            existing = await db.execute(
+                select(TestResult).where(TestResult.pipeline_run_id == run.id).limit(1)
+            )
+            tr = existing.scalar_one_or_none()
+            has_scenarios = tr and tr.scenarios and tr.scenarios not in ('[]', '', 'null')
+            if not has_scenarios:
+                await _do_testing(db, run, project)
+        return  # Pause here — user reviews results and clicks approve/rework
 
     # Stage: creating_mr (triggered by /tests/approve)
     if run.status == "creating_mr":
@@ -105,7 +115,7 @@ async def _do_planning(db: AsyncSession, run: PipelineRun, project: Project):
     feedback = last_plan.user_edits if last_plan else ""
 
     agent = PlannerAgent(run_id)
-    cwd = project.backend_dir or project.frontend_dir or "/tmp"
+    cwd = project.monolithic_dir or project.backend_dir or project.frontend_dir or "/tmp"
 
     result = await agent.run(
         project_dir=cwd,
@@ -156,7 +166,7 @@ async def _do_development(db: AsyncSession, run: PipelineRun, project: Project):
 
     await _update_zoho(db, run, project, "developing", comment=_fmt_dev_start_comment(run, project))
 
-    project_dir = project.backend_dir or project.frontend_dir or "/tmp"
+    project_dir = project.monolithic_dir or project.backend_dir or project.frontend_dir or "/tmp"
     base_branch = project.base_branch or "develop"
 
     # Pull latest from base branch before starting work to reduce merge conflicts
@@ -176,31 +186,45 @@ async def _do_development(db: AsyncSession, run: PipelineRun, project: Project):
     # Capture HEAD SHA before agents run so we can undo any commits they make
     head_before = await _git_head_sha(project_dir)
 
-    # Run frontend and backend agents in parallel
     tasks = []
     task_number = run.zoho_task_number or ""
 
-    if project.backend_dir:
-        backend_agent = BackendDeveloperAgent(run_id)
-        tasks.append(backend_agent.run(
-            backend_dir=project.backend_dir,
-            backend_tech=project.backend_tech or "fastapi",
+    if project.monolithic_dir:
+        # Single agent handles everything in one directory (Django, Rails, etc.)
+        publish_log(run_id, f"[Orchestrator] Monolithic project — running single agent in {project.monolithic_dir}")
+        mono_agent = MonolithicDeveloperAgent(run_id)
+        tech_stack = " + ".join(filter(None, [project.backend_tech, project.frontend_tech]))
+        tasks.append(mono_agent.run(
+            project_dir=project.monolithic_dir,
             task_title=run.zoho_task_title or "",
             approved_plan=plan_content,
+            tech_stack=tech_stack,
             task_number=task_number,
             db=db,
         ))
+    else:
+        # Separate backend / frontend agents run in parallel
+        if project.backend_dir:
+            backend_agent = BackendDeveloperAgent(run_id)
+            tasks.append(backend_agent.run(
+                backend_dir=project.backend_dir,
+                backend_tech=project.backend_tech or "fastapi",
+                task_title=run.zoho_task_title or "",
+                approved_plan=plan_content,
+                task_number=task_number,
+                db=db,
+            ))
 
-    if project.frontend_dir:
-        frontend_agent = FrontendDeveloperAgent(run_id)
-        tasks.append(frontend_agent.run(
-            frontend_dir=project.frontend_dir,
-            frontend_tech=project.frontend_tech or "react",
-            task_title=run.zoho_task_title or "",
-            approved_plan=plan_content,
-            task_number=task_number,
-            db=db,
-        ))
+        if project.frontend_dir:
+            frontend_agent = FrontendDeveloperAgent(run_id)
+            tasks.append(frontend_agent.run(
+                frontend_dir=project.frontend_dir,
+                frontend_tech=project.frontend_tech or "react",
+                task_title=run.zoho_task_title or "",
+                approved_plan=plan_content,
+                task_number=task_number,
+                db=db,
+            ))
 
     if tasks:
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -254,16 +278,17 @@ async def _do_testing(db: AsyncSession, run: PipelineRun, project: Project):
             snippet_start = plan_content.lower().find("scenario")
         if snippet_start >= 0:
             publish_log(run_id, f"[Orchestrator] Plan snippet: {plan_content[snippet_start:snippet_start+400]}")
-    scenarios = _extract_scenarios_from_plan(plan_content)
-    publish_log(run_id, f"[Orchestrator] Extracted {len(scenarios)} manual test scenario(s) from plan")
-    for i, s in enumerate(scenarios):
-        publish_log(run_id, f"[Orchestrator]   [{i+1}] {s['name']}")
-    publish_log(run_id, "[Orchestrator] Running automated browser tests…")
+    all_scenarios = _extract_scenarios_from_plan(plan_content)
+    playwright_scenarios = [s for s in all_scenarios if s.get('type') == 'playwright']
+    manual_scenarios = [s for s in all_scenarios if s.get('type') != 'playwright']
+    publish_log(run_id, f"[Orchestrator] Extracted {len(playwright_scenarios)} playwright + {len(manual_scenarios)} manual scenario(s)")
+    for i, s in enumerate(all_scenarios):
+        publish_log(run_id, f"[Orchestrator]   [{i+1}] [{s.get('type','manual')}] {s['name']}")
 
     browser_output = None
     browser_status = "skipped"
 
-    if project.server_start_command and project.server_port:
+    if playwright_scenarios and project.server_start_command and project.server_port:
         publish_log(run_id, "[Orchestrator] Starting project server for browser tests...")
         server_proc = await asyncio.create_subprocess_shell(
             project.server_start_command,
@@ -275,45 +300,65 @@ async def _do_testing(db: AsyncSession, run: PipelineRun, project: Project):
         try:
             from app.agents.browser_test_agent import BrowserTestAgent
             b_agent = BrowserTestAgent(run_id=run_id)
+            # Close the DB session before the long-running browser test so the
+            # connection isn't held idle (PostgreSQL drops idle connections).
+            await db.close()
             b_result = await b_agent.run(
                 project_dir=project.backend_dir or project.frontend_dir or "/tmp",
                 port=project.server_port,
                 task_title=run.zoho_task_title or "",
                 task_description=run.zoho_task_description or "",
-                scenarios=scenarios,
-                db=db,
+                scenarios=playwright_scenarios,
+                db=None,
             )
             browser_output = b_result.output
-            browser_status = "passed" if b_result.success else "failed"
+            # Parse per-scenario results and update each playwright scenario's status
+            per_scenario = _parse_per_scenario_results(browser_output or "", playwright_scenarios)
+            for s in playwright_scenarios:
+                s['status'] = per_scenario.get(s['id'], 'failed' if not b_result.success else 'passed')
+            browser_status = "passed" if all(s['status'] == 'passed' for s in playwright_scenarios) else "failed"
         except Exception as e:
-            publish_log(run_id, f"[Orchestrator] Browser tests error: {e}")
+            publish_log(run_id, f"[Orchestrator] Browser tests error: {e}\n{traceback.format_exc()}")
             browser_status = "error"
+            for s in playwright_scenarios:
+                s['status'] = 'pending'
         finally:
-            server_proc.terminate()
+            try:
+                server_proc.terminate()
+            except ProcessLookupError:
+                pass  # process already exited — that's fine
             publish_log(run_id, "[Orchestrator] Project server stopped")
+    elif playwright_scenarios:
+        publish_log(run_id, "[Orchestrator] No server configured — playwright scenarios skipped")
+        browser_status = "skipped"
     else:
-        publish_log(run_id, "[Orchestrator] No server configured — skipping browser tests")
+        publish_log(run_id, "[Orchestrator] No playwright scenarios — skipping browser tests")
+
+    # Combine: playwright first (with auto-status), then manual
+    scenarios = playwright_scenarios + manual_scenarios
 
     publish_log(run_id, "[Orchestrator] Waiting for user to complete manual testing…")
 
+    # Use a fresh DB session after potentially long browser test gap
     from app.models.test_result import TestResult
-    test = TestResult(
-        pipeline_run_id=run.id,
-        total=len(scenarios),
-        passed=0,
-        failed=0,
-        skipped=0,
-        scenarios=json.dumps(scenarios),
-        raw_output=f"Manual testing — {len(scenarios)} scenario(s) to verify",
-        browser_test_output=browser_output,
-        browser_test_status=browser_status,
-    )
-    db.add(test)
+    async with AsyncSessionLocal() as fresh_db:
+        test = TestResult(
+            pipeline_run_id=run.id,
+            total=len(scenarios),
+            passed=0,
+            failed=0,
+            skipped=0,
+            scenarios=json.dumps(scenarios),
+            raw_output=f"{len(playwright_scenarios)} playwright + {len(manual_scenarios)} manual scenario(s)",
+            browser_test_output=browser_output,
+            browser_test_status=browser_status,
+        )
+        fresh_db.add(test)
+        await fresh_db.commit()
 
     # Stay at 'testing' — this is the interactive human gate.
     # The user will tick off scenarios and click "Testing Done".
     # The approve_tests API endpoint will then advance to creating_mr.
-    await db.commit()
     publish_stage(run_id, "testing")
 
 
@@ -557,65 +602,105 @@ def _fmt_testing_comment() -> str:
     )
 
 
-def _extract_scenarios_from_plan(plan_content: str) -> list[dict]:
+def _find_plan_section(plan_content: str, header_pattern: str) -> str:
     """
-    Parse manual test scenarios from the plan.
-    Handles the formats Claude actually produces:
-      - Single-line: Scenario: NAME Steps: STEPS Expected: EXPECTED
-      - Multi-line:  **Scenario: name**\nSteps: ...\nExpected: ...
-      - Fallback:    numbered/bullet list items
+    Robust line-by-line section extractor.
+    Finds the first line containing header_pattern (case-insensitive),
+    then captures body lines until the next heading-like line.
+    Handles any prefix: '3. **Playwright...', '## Playwright...', '**Playwright...', etc.
     """
-    if not plan_content:
-        return []
+    header_re = re.compile(header_pattern, re.IGNORECASE)
+    # Matches lines that start a new section (number+dot, #heading, or bold ALL-CAPS word)
+    next_heading_re = re.compile(r'^\s*(?:#{1,6}\s|\d+\.\s|[-*]\s*\*\*[A-Z]|\*\*[A-Z])', re.IGNORECASE)
 
-    # ── Step 1: Narrow to the "Manual Test Scenarios" section if present ──
-    section_pattern = re.compile(
-        r'(?:^|\n)'
-        r'(?:#+\s*|[\d]+\.\s*|\*\*)?'
-        r'(?:Manual\s+Test\s+Scenarios?|Test\s+Cases?|Testing\s+Scenarios?)'
-        r'[^\n]*\n'
-        r'(.*?)(?=\n(?:#+\s|[\d]+\.\s)|\Z)',
-        re.IGNORECASE | re.DOTALL,
-    )
-    section_match = section_pattern.search(plan_content)
-    section = section_match.group(1) if section_match else plan_content
+    lines = plan_content.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if header_re.search(line):
+            start = i + 1
+            break
+    if start is None:
+        return ""
 
-    scenarios: list[dict] = []
+    body_lines = []
+    for line in lines[start:]:
+        # Stop at the next major section heading
+        if next_heading_re.match(line) and body_lines:
+            break
+        body_lines.append(line)
 
-    # ── Step 2: Split on any "Scenario:" occurrence (bold or plain) ───────
-    # Handles both single-line and multi-line formats.
-    chunks = re.split(r'(?i)(?:\*\*\s*)?Scenario:\s*', section)
-    for chunk in chunks[1:]:  # skip preamble before first Scenario:
+    return "\n".join(body_lines).strip()
+
+
+def _parse_scenario_chunks(section: str, prefix_pattern: str, type_tag: str) -> list[dict]:
+    """Split a plan section on scenario headings and return structured dicts."""
+    results = []
+    chunks = re.split(r'(?i)(?:\*\*\s*)?' + prefix_pattern + r'\s*', section)
+    for chunk in chunks[1:]:
         chunk = chunk.strip()
         if not chunk:
             continue
-
-        # Name ends at **: or before " Steps:" or " Expected:" or newline
         name_m = re.match(r'(.+?)(?=\*\*|\s+Steps?:|\s+Expected|\n|$)', chunk)
         name = name_m.group(1).strip() if name_m else chunk.split('\n')[0].strip()
         if not name:
             continue
-
-        # Steps: everything between "Steps:" and "Expected:" (handles bold labels too)
         steps_m = re.search(r'\*{0,2}[Ss]teps?\*{0,2}:?\s*(.+?)(?=\s*\*{0,2}[Ee]xpected[^:]*:|\Z)', chunk, re.DOTALL)
-        # Expected: everything after "Expected Result:" or "Expected:" (handles bold labels)
         expected_m = re.search(r'\*{0,2}[Ee]xpected[^:\n]*:\*{0,2}\s*(.+)', chunk, re.DOTALL)
-
-        scenarios.append({
+        results.append({
             'id': str(_uuid.uuid4())[:8],
             'name': name,
             'steps': steps_m.group(1).strip() if steps_m else '',
             'expected': expected_m.group(1).strip() if expected_m else '',
             'status': 'pending',
+            'type': type_tag,
         })
+    return results
+
+
+def _extract_scenarios_from_plan(plan_content: str) -> list[dict]:
+    """
+    Parse test scenarios from the plan, splitting into 'playwright' and 'manual' types.
+    New planner format produces two sections:
+      - "Playwright Test Scenarios" → type: "playwright"
+      - "Manual Test Scenarios"    → type: "manual"
+    Fallback for old plans: all scenarios tagged as "manual".
+    """
+    if not plan_content:
+        return []
+
+    playwright_section = _find_plan_section(plan_content, r'Playwright\s+Test\s+Scenarios?')
+    manual_section = _find_plan_section(plan_content, r'Manual\s+Test\s+Scenarios?')
+
+    scenarios: list[dict] = []
+
+    if playwright_section:
+        scenarios.extend(_parse_scenario_chunks(playwright_section, r'Playwright\s+Scenario:', 'playwright'))
+
+    if manual_section:
+        # Use strict prefix so "Playwright Scenario:" is NOT matched here
+        scenarios.extend(_parse_scenario_chunks(manual_section, r'(?<!Playwright\s)Scenario:', 'manual'))
 
     if scenarios:
         return scenarios
 
-    # ── Step 3: Fallback — numbered / bullet list items ───────────────────
+    # ── Fallback: old plan format — parse ALL scenario types from whole doc ──
+    # Tag "Playwright Scenario:" items as playwright, plain "Scenario:" as manual.
+    all_scenarios = _parse_scenario_chunks(plan_content, r'Playwright\s+Scenario:', 'playwright')
+    all_scenarios += [
+        s for s in _parse_scenario_chunks(plan_content, r'(?<![Pp]laywright\s)Scenario:', 'manual')
+        # deduplicate by name against already-found playwright ones
+        if not any(p['name'] == s['name'] for p in all_scenarios)
+    ]
+    if all_scenarios:
+        return all_scenarios
+
+    # ── Last resort: numbered / bullet list items ──
+    fallback_section = _find_plan_section(
+        plan_content, r'(?:Manual\s+)?Test\s+(?:Scenarios?|Cases?|Steps?)'
+    ) or plan_content
     for m in re.finditer(
         r'(?:^|\n)[ \t]*(?:\d+[\.\)]\s+|\-\s+|\*\s+)([^\n]{8,})',
-        section,
+        fallback_section,
     ):
         name = m.group(1).strip()
         if name.startswith('→') or len(name) < 8:
@@ -626,9 +711,28 @@ def _extract_scenarios_from_plan(plan_content: str) -> list[dict]:
             'steps': '',
             'expected': '',
             'status': 'pending',
+            'type': 'manual',
         })
 
     return scenarios
+
+
+def _parse_per_scenario_results(output: str, scenarios: list[dict]) -> dict[str, str]:
+    """
+    Match per-scenario pass/fail from Claude's markdown report.
+    Returns {scenario_id: "passed" | "failed"}.
+    Looks for the scenario name followed by a "Status: PASSED/FAILED" line.
+    """
+    results = {}
+    for s in scenarios:
+        pattern = re.compile(
+            re.escape(s['name']) + r'.*?[-*]\s*Status:\s*(PASSED|FAILED)',
+            re.IGNORECASE | re.DOTALL,
+        )
+        m = pattern.search(output)
+        if m:
+            results[s['id']] = m.group(1).lower()
+    return results
 
 
 def _fmt_pr_comment(branch_name: str, base_branch: str, mr_url: str, task_title: str) -> str:

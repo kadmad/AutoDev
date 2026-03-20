@@ -48,15 +48,26 @@ Analyze the codebase and generate a detailed implementation plan including:
    - API integration points
    - State management changes
 
-3. **Manual Test Scenarios**
-   List 3–6 realistic scenarios a tester should verify manually.
-   Use this exact format for EACH scenario:
+3. **Playwright Test Scenarios** (Automated via browser)
+   For features that can be verified through browser automation: UI interactions, form submissions,
+   navigation flows, visible API responses, CRUD operations in the UI, etc.
+   List 3–5 scenarios. Use this EXACT format for EACH:
+
+   **Playwright Scenario: [Short descriptive name]**
+   Steps: [Step 1] → [Step 2] → [Step 3]
+   Expected: [What should appear or happen in the browser]
+
+4. **Manual Test Scenarios** (Human judgment required)
+   ONLY for things that CANNOT be automated: visual/design review, external email/SMS verification,
+   complex multi-system business rules, or environment-specific checks.
+   List 1–3 scenarios (fewer is fine — only include what truly needs a human).
+   Use this EXACT format for EACH:
 
    **Scenario: [Short descriptive name]**
    Steps: [Step 1] → [Step 2] → [Step 3]
    Expected: [What the tester should see or verify]
 
-4. **Implementation Order**
+5. **Implementation Order**
    - Step-by-step sequence
 
 Output as structured markdown with clear headings. Be specific about file paths and function names."""

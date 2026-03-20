@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import re
+import shutil
 import tempfile
 from typing import Optional
 
@@ -22,7 +23,7 @@ class BrowserTestAgent(BaseAgent):
         task_title: str,
         task_description: str,
         scenarios: list[dict],
-        db,
+        db=None,
     ) -> AgentResult:
         if not port:
             self.publish_log("[BrowserTest] No server port configured — skipping browser tests")
@@ -35,13 +36,15 @@ class BrowserTestAgent(BaseAgent):
             "mcpServers": {
                 "playwright": {
                     "command": "npx",
-                    "args": ["@playwright/mcp@latest", "--headless"],
+                    "args": ["@playwright/mcp@latest"],
                 }
             }
         }
         config_fd, config_path = tempfile.mkstemp(
             prefix=f"autodev-playwright-{self.run_id}-", suffix=".json"
         )
+        # Isolated work dir so Claude never writes screenshots/configs into the project
+        test_work_dir = tempfile.mkdtemp(prefix=f"autodev-browser-{self.run_id}-")
         try:
             with os.fdopen(config_fd, "w") as f:
                 json.dump(mcp_config, f)
@@ -50,7 +53,7 @@ class BrowserTestAgent(BaseAgent):
 
             output, exit_code = await asyncio.wait_for(
                 run_claude(
-                    cwd=project_dir,
+                    cwd=test_work_dir,
                     prompt=prompt,
                     mcp_config_path=config_path,
                     stream_callback=lambda line: self.publish_log(f"[BrowserTest] {line}"),
@@ -78,6 +81,7 @@ class BrowserTestAgent(BaseAgent):
                 os.unlink(config_path)
             except Exception:
                 pass
+            shutil.rmtree(test_work_dir, ignore_errors=True)
 
     def _build_prompt(
         self,

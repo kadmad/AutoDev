@@ -43,6 +43,9 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         # Idempotent column migrations — runs safely on every startup
         await conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN IF NOT EXISTS monolithic_dir TEXT;"
+        ))
+        await conn.execute(text(
             "ALTER TABLE projects ADD COLUMN IF NOT EXISTS zoho_portal_name VARCHAR(255);"
         ))
         await conn.execute(text(
@@ -55,7 +58,19 @@ async def init_db():
             "ALTER TABLE projects ADD COLUMN IF NOT EXISTS server_port INTEGER;"
         ))
         await conn.execute(text(
+            "ALTER TABLE projects ADD COLUMN IF NOT EXISTS zoho_project_name VARCHAR(255);"
+        ))
+        await conn.execute(text(
             "ALTER TABLE test_results ADD COLUMN IF NOT EXISTS scenarios TEXT;"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE test_results ADD COLUMN IF NOT EXISTS browser_test_output TEXT;"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE test_results ADD COLUMN IF NOT EXISTS browser_test_status VARCHAR(20);"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE zoho_configs ADD COLUMN IF NOT EXISTS api_domain VARCHAR(255);"
         ))
         await conn.execute(text(
             "ALTER TABLE pipeline_runs ADD COLUMN IF NOT EXISTS zoho_task_number VARCHAR(100);"

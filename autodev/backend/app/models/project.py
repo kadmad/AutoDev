@@ -14,6 +14,7 @@ class Project(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    monolithic_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
     frontend_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
     backend_dir: Mapped[str | None] = mapped_column(Text, nullable=True)
     frontend_tech: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -28,6 +29,7 @@ class Project(Base):
     repo_full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)  # "owner/repo" for GitHub
     zoho_portal_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     zoho_project_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    zoho_project_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     server_start_command: Mapped[str | None] = mapped_column(Text, nullable=True)  # e.g. "uvicorn main:app --port 8001"
     server_port: Mapped[int | None] = mapped_column(nullable=True)  # port the server listens on
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

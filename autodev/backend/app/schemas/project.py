@@ -7,6 +7,7 @@ from typing import Optional, List
 class ProjectCreate(BaseModel):
     name: str
     description: Optional[str] = None
+    monolithic_dir: Optional[str] = None
     frontend_dir: Optional[str] = None
     backend_dir: Optional[str] = None
     frontend_tech: Optional[str] = None
@@ -28,6 +29,7 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    monolithic_dir: Optional[str] = None
     frontend_dir: Optional[str] = None
     backend_dir: Optional[str] = None
     frontend_tech: Optional[str] = None
@@ -51,6 +53,7 @@ class ProjectResponse(BaseModel):
     user_id: UUID
     name: str
     description: Optional[str]
+    monolithic_dir: Optional[str]
     frontend_dir: Optional[str]
     backend_dir: Optional[str]
     frontend_tech: Optional[str]

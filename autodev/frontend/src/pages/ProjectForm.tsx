@@ -14,6 +14,7 @@ export default function ProjectForm() {
   const [form, setForm] = useState({
     name: '',
     description: '',
+    monolithic_dir: '',
     frontend_dir: '',
     backend_dir: '',
     frontend_tech: 'react',
@@ -28,6 +29,7 @@ export default function ProjectForm() {
     repo_full_name: '',
     zoho_portal_name: '',
     zoho_project_id: '',
+    zoho_project_name: '',
     server_start_command: '',
     server_port: '',
   })
@@ -61,6 +63,7 @@ export default function ProjectForm() {
         setForm({
           name: p.name,
           description: p.description || '',
+          monolithic_dir: p.monolithic_dir || '',
           frontend_dir: p.frontend_dir || '',
           backend_dir: p.backend_dir || '',
           frontend_tech: p.frontend_tech || 'react',
@@ -75,6 +78,7 @@ export default function ProjectForm() {
           repo_full_name: p.repo_full_name || '',
           zoho_portal_name: p.zoho_portal_name || '',
           zoho_project_id: p.zoho_project_id || '',
+          zoho_project_name: p.zoho_project_name || '',
           server_start_command: p.server_start_command || '',
           server_port: p.server_port ? String(p.server_port) : '',
         })
@@ -98,11 +102,13 @@ export default function ProjectForm() {
     try {
       const payload = {
         ...form,
+        monolithic_dir: form.monolithic_dir || null,
         pr_checklist: form.pr_checklist.filter(Boolean),
         git_provider: form.git_provider || null,
         repo_full_name: form.repo_full_name || null,
         zoho_portal_name: form.zoho_portal_name || null,
         zoho_project_id: form.zoho_project_id || null,
+        zoho_project_name: form.zoho_project_name || null,
         server_start_command: form.server_start_command || null,
         server_port: form.server_port ? parseInt(form.server_port, 10) : null,
       }
@@ -159,26 +165,57 @@ export default function ProjectForm() {
           <h2 className="font-semibold">Project Directories</h2>
           <GuidanceNote title="Absolute Paths Required">
             <p>These must be absolute paths on the machine where AutoDev is running.</p>
-            <p>Example: <code>/home/user/projects/myapp/frontend</code></p>
+            <p>Example: <code>/home/user/projects/myapp</code></p>
           </GuidanceNote>
+
+          {/* Monolithic */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Frontend Directory</label>
+            <div className="flex items-center gap-2 mb-1">
+              <label className="block text-sm font-medium text-gray-700">Monolithic Directory</label>
+              <span className="text-xs bg-purple-50 text-purple-700 border border-purple-200 rounded px-1.5 py-0.5">
+                Django / Rails / full-stack in one dir
+              </span>
+            </div>
             <input
               className="w-full rounded-lg border px-3 py-2 text-sm font-mono"
-              value={form.frontend_dir}
-              onChange={(e) => set('frontend_dir', e.target.value)}
-              placeholder="/absolute/path/to/frontend"
+              value={form.monolithic_dir}
+              onChange={(e) => set('monolithic_dir', e.target.value)}
+              placeholder="/absolute/path/to/project"
             />
+            <p className="mt-1 text-xs text-gray-400">
+              Set this when backend + frontend share one directory. A single agent implements all changes here.
+              Leave blank and use the fields below for separate frontend/backend directories.
+            </p>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Backend Directory</label>
-            <input
-              className="w-full rounded-lg border px-3 py-2 text-sm font-mono"
-              value={form.backend_dir}
-              onChange={(e) => set('backend_dir', e.target.value)}
-              placeholder="/absolute/path/to/backend"
-            />
-          </div>
+
+          {/* Separator */}
+          {!form.monolithic_dir && (
+            <>
+              <div className="flex items-center gap-3">
+                <div className="flex-1 border-t border-gray-200" />
+                <span className="text-xs text-gray-400">or split directories</span>
+                <div className="flex-1 border-t border-gray-200" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Frontend Directory</label>
+                <input
+                  className="w-full rounded-lg border px-3 py-2 text-sm font-mono"
+                  value={form.frontend_dir}
+                  onChange={(e) => set('frontend_dir', e.target.value)}
+                  placeholder="/absolute/path/to/frontend"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Backend Directory</label>
+                <input
+                  className="w-full rounded-lg border px-3 py-2 text-sm font-mono"
+                  value={form.backend_dir}
+                  onChange={(e) => set('backend_dir', e.target.value)}
+                  placeholder="/absolute/path/to/backend"
+                />
+              </div>
+            </>
+          )}
         </section>
 
         {/* Tech Stack */}
@@ -373,6 +410,22 @@ export default function ProjectForm() {
             />
             <p className="mt-1 text-xs text-gray-400">
               Numeric ID from the Zoho Projects URL or API response.
+            </p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Zoho Project Name
+              <span className="ml-1.5 text-xs font-normal text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">used for routing</span>
+            </label>
+            <input
+              className="w-full rounded-lg border px-3 py-2 text-sm"
+              value={form.zoho_project_name}
+              onChange={(e) => set('zoho_project_name', e.target.value)}
+              placeholder="My Zoho Project"
+            />
+            <p className="mt-1 text-xs text-gray-400">
+              The name of the Zoho project exactly as it appears in Zoho. When a task webhook arrives,
+              AutoDev matches it to this project by Zoho Project ID first, then by this name.
             </p>
           </div>
         </section>

@@ -6,8 +6,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.user import ZohoConfig
 from app.config import settings
 
-ZOHO_API_BASE = "https://projectsapi.zoho.com/restapi"
+ZOHO_API_BASE = "https://projectsapi.zoho.com/restapi"  # default (US/global)
 ZOHO_ACCOUNTS_BASE = "https://accounts.zoho.com"
+
+
+def _projects_api_base(config) -> str:
+    """Return the correct regional Zoho Projects API base for this config."""
+    domain = getattr(config, "api_domain", None)
+    if not domain:
+        return ZOHO_API_BASE
+    # api_domain looks like "https://www.zohoapis.in"
+    # Projects API is  "https://projectsapi.zoho.in/restapi"
+    try:
+        tld = domain.rstrip("/").split("zohoapis.")[-1]  # "in", "eu", "com", etc.
+        return f"https://projectsapi.zoho.{tld}/restapi"
+    except Exception:
+        return ZOHO_API_BASE
 
 
 def get_zoho_auth_url() -> str:
@@ -119,14 +133,17 @@ async def save_tokens(config: ZohoConfig, token_data: dict, db: AsyncSession):
     config.refresh_token = token_data.get("refresh_token", config.refresh_token)
     config.token_expiry = datetime.utcnow() + timedelta(seconds=token_data.get("expires_in", 3600))
     config.token_expired = False
+    if token_data.get("api_domain"):
+        config.api_domain = token_data["api_domain"]
     await db.commit()
 
 
-async def get_portals(token: str) -> list[dict]:
+async def get_portals(token: str, api_domain: str = None) -> list[dict]:
     """Return list of portals the user has access to."""
+    base = _projects_api_base(type("_", (), {"api_domain": api_domain})()) if api_domain else ZOHO_API_BASE
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
-            f"{ZOHO_API_BASE}/portals/",
+            f"{base}/portals/",
             headers={"Authorization": f"Zoho-oauthtoken {token}"},
         )
         resp.raise_for_status()
@@ -134,11 +151,12 @@ async def get_portals(token: str) -> list[dict]:
         return data.get("portals", [])
 
 
-async def get_projects_for_portal(token: str, portal_name: str) -> list[dict]:
+async def get_projects_for_portal(token: str, portal_name: str, api_domain: str = None) -> list[dict]:
     """Return list of projects in the given portal."""
+    base = _projects_api_base(type("_", (), {"api_domain": api_domain})()) if api_domain else ZOHO_API_BASE
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
-            f"{ZOHO_API_BASE}/portal/{portal_name}/projects/",
+            f"{base}/portal/{portal_name}/projects/",
             headers={"Authorization": f"Zoho-oauthtoken {token}"},
         )
         resp.raise_for_status()
@@ -152,7 +170,7 @@ async def get_tasks(config: ZohoConfig, db: AsyncSession) -> list[dict]:
     if not token:
         return []
 
-    url = f"{ZOHO_API_BASE}/portal/{config.portal_name}/projects/{config.project_id}/tasks/"
+    url = f"{_projects_api_base(config)}/portal/{config.portal_name}/projects/{config.project_id}/tasks/"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -203,7 +221,7 @@ async def update_task_status(
     if not token:
         return False  # Token expired — skip silently, pipeline continues
 
-    url = f"{ZOHO_API_BASE}/portal/{portal}/projects/{pid}/tasks/{task_id}/"
+    url = f"{_projects_api_base(config)}/portal/{portal}/projects/{pid}/tasks/{task_id}/"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
@@ -272,7 +290,7 @@ async def post_zoho_comment(
     if not token:
         return False
 
-    url = f"{ZOHO_API_BASE}/portal/{portal}/projects/{pid}/tasks/{task_id}/comments/"
+    url = f"{_projects_api_base(config)}/portal/{portal}/projects/{pid}/tasks/{task_id}/comments/"
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
