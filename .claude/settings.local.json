@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3:*)",
+      "Bash(psql:*)",
+      "Bash(venv/bin/pip install:*)",
+      "Bash(python3.11 --version)",
+      "Bash(python3.12 --version)",
+      "Bash(rm:*)",
+      "Bash(npm install:*)",
+      "Bash(curl:*)",
+      "Bash(source:*)",
+      "Bash(pkill:*)",
+      "Bash(lsof:*)",
+      "Bash(npx tsc:*)",
+      "Bash(python:*)",
+      "Bash(kill 753:*)",
+      "Bash(kill 3946:*)",
+      "Bash(kill 12662:*)",
+      "Bash(ls:*)",
+      "Bash(node_modules/.bin/tsc:*)",
+      "Bash(node_modules/.bin/vite build:*)",
+      "Bash(kill:*)"
+    ]
+  }
+}

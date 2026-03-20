@@ -1,0 +1,71 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# ── Environment / Secrets ──────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Node / Frontend ───────────────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+
+# ── Database / Storage ────────────────────────────────────────────────────────
+*.sqlite3
+*.db
+postgres-data/
+redis-data/
+
+# ── Alembic ───────────────────────────────────────────────────────────────────
+# Keep migrations tracked — only ignore the temp target
+alembic/versions/__pycache__/
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+docker-volumes/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── Editors ───────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Logs & Temp ───────────────────────────────────────────────────────────────
+logs/
+*.log
+tmp/
+temp/
